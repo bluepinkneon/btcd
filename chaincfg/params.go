@@ -65,6 +65,12 @@ var (
 		{"2a01:7c8:d005:390::5", false},
 		{"v7ajjeirttkbnt32wpy3c6w3emwnfr3fkla7hpxcfokr3ysd3kqtzmqd.onion:38333", false},
 	}
+
+	// MutinyNetChallenge is the signet challenge for Mutinynet.
+	// Mutinynet uses 30-second blocks instead of 10-minute blocks.
+	MutinyNetChallenge, _ = hex.DecodeString(
+		"512102f7561d208dd9ae99bf497273e16f389bdbd6c4742ddb8e6b216e64fa2928ad8f51ae",
+	)
 )
 
 // Checkpoint identifies a known good point in the block chain.  Using
@@ -982,6 +988,12 @@ var SigNetParams = CustomSignetParams(
 	DefaultSignetChallenge, DefaultSignetDNSSeeds,
 )
 
+// MutinyNetParams defines the network parameters for Mutinynet, a custom signet
+// with 30-second block times instead of the standard 10-minute blocks.
+var MutinyNetParams = CustomMutinyNetParams(
+	MutinyNetChallenge, nil,
+)
+
 // CustomSignetParams creates network parameters for a custom signet network
 // from a challenge. The challenge is the binary compiled version of the block
 // challenge script.
@@ -1059,6 +1071,127 @@ func CustomSignetParams(challenge []byte, dnsSeeds []DNSSeed) Params {
 					time.Time{}, // Never expires
 				),
 				AlwaysActiveHeight: 1,
+			},
+			DeploymentCSV: {
+				BitNumber: 29,
+				DeploymentStarter: NewMedianTimeDeploymentStarter(
+					time.Time{}, // Always available for vote
+				),
+				DeploymentEnder: NewMedianTimeDeploymentEnder(
+					time.Time{}, // Never expires
+				),
+			},
+			DeploymentSegwit: {
+				BitNumber: 29,
+				DeploymentStarter: NewMedianTimeDeploymentStarter(
+					time.Time{}, // Always available for vote
+				),
+				DeploymentEnder: NewMedianTimeDeploymentEnder(
+					time.Time{}, // Never expires
+				),
+			},
+			DeploymentTaproot: {
+				BitNumber: 29,
+				DeploymentStarter: NewMedianTimeDeploymentStarter(
+					time.Time{}, // Always available for vote
+				),
+				DeploymentEnder: NewMedianTimeDeploymentEnder(
+					time.Time{}, // Never expires
+				),
+			},
+		},
+
+		// Mempool parameters
+		RelayNonStdTxs: false,
+
+		// Human-readable part for Bech32 encoded segwit addresses, as defined in
+		// BIP 173.
+		Bech32HRPSegwit: "tb", // always tb for test net
+
+		// Address encoding magics
+		PubKeyHashAddrID:        0x6f, // starts with m or n
+		ScriptHashAddrID:        0xc4, // starts with 2
+		WitnessPubKeyHashAddrID: 0x03, // starts with QW
+		WitnessScriptHashAddrID: 0x28, // starts with T7n
+		PrivateKeyID:            0xef, // starts with 9 (uncompressed) or c (compressed)
+
+		// BIP32 hierarchical deterministic extended key magics
+		HDPrivateKeyID: [4]byte{0x04, 0x35, 0x83, 0x94}, // starts with tprv
+		HDPublicKeyID:  [4]byte{0x04, 0x35, 0x87, 0xcf}, // starts with tpub
+
+		// BIP44 coin type used in the hierarchical deterministic path for
+		// address generation.
+		HDCoinType: 1,
+	}
+}
+
+// CustomMutinyNetParams creates network parameters for Mutinynet, which uses
+// 30-second blocks instead of 10-minute blocks. This is required because
+// Mutinynet's difficulty retargeting happens 20x faster than standard signet.
+func CustomMutinyNetParams(challenge []byte, dnsSeeds []DNSSeed) Params {
+	// The message start is defined as the first four bytes of the sha256d
+	// of the challenge script, as a single push (i.e. prefixed with the
+	// challenge script length).
+	challengeLength := byte(len(challenge))
+	hashDouble := chainhash.DoubleHashB(
+		append([]byte{challengeLength}, challenge...),
+	)
+
+	// We use little endian encoding of the hash prefix to be in line with
+	// the other wire network identities.
+	net := binary.LittleEndian.Uint32(hashDouble[0:4])
+	return Params{
+		Name:        "signet", // Use "signet" for btcwallet compatibility
+		Net:         wire.BitcoinNet(net),
+		DefaultPort: "38333",
+		DNSSeeds:    dnsSeeds,
+
+		// Chain parameters
+		GenesisBlock:             &sigNetGenesisBlock,
+		GenesisHash:              &sigNetGenesisHash,
+		PowLimit:                 sigNetPowLimit,
+		PowLimitBits:             0x1e0377ae,
+		BIP0034Height:            1,
+		BIP0065Height:            1,
+		BIP0066Height:            1,
+		CoinbaseMaturity:         100,
+		SubsidyReductionInterval: 210000,
+		TargetTimespan:           time.Second * 30 * 2016, // ~16.8 hours (30s * 2016 blocks)
+		TargetTimePerBlock:       time.Second * 30,        // 30 seconds
+		RetargetAdjustmentFactor: 4,                       // 25% less, 400% more
+		ReduceMinDifficulty:      false,
+		MinDiffReductionTime:     time.Second * 60, // TargetTimePerBlock * 2
+		GenerateSupported:        false,
+
+		// Checkpoints ordered from oldest to newest.
+		Checkpoints: nil,
+
+		// Consensus rule change deployments.
+		//
+		// The miner confirmation window is defined as:
+		//   target proof of work timespan / target proof of work spacing
+		RuleChangeActivationThreshold: 1916, // 95% of 2016
+		MinerConfirmationWindow:       2016,
+		Deployments: [DefinedDeployments]ConsensusDeployment{
+			DeploymentTestDummy: {
+				BitNumber: 28,
+				DeploymentStarter: NewMedianTimeDeploymentStarter(
+					time.Unix(1199145601, 0), // January 1, 2008 UTC
+				),
+				DeploymentEnder: NewMedianTimeDeploymentEnder(
+					time.Unix(1230767999, 0), // December 31, 2008 UTC
+				),
+			},
+			DeploymentTestDummyMinActivation: {
+				BitNumber:                 22,
+				CustomActivationThreshold: 1815,    // Only needs 90% hash rate.
+				MinActivationHeight:       10_0000, // Can only activate after height 10k.
+				DeploymentStarter: NewMedianTimeDeploymentStarter(
+					time.Time{}, // Always available for vote
+				),
+				DeploymentEnder: NewMedianTimeDeploymentEnder(
+					time.Time{}, // Never expires
+				),
 			},
 			DeploymentCSV: {
 				BitNumber: 29,
